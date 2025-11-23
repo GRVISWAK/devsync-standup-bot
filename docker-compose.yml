@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: standup-bot-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: standup_bot
+      MYSQL_USER: standupuser
+      MYSQL_PASSWORD: standuppass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - standup-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  app:
+    build: .
+    container_name: standup-bot-app
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      # Database Configuration
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/standup_bot?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: standupuser
+      SPRING_DATASOURCE_PASSWORD: standuppass
+      
+      # Zoho Cliq Configuration (Set these before deploying)
+      ZOHO_CLIQ_WEBHOOK_URL: ${ZOHO_CLIQ_WEBHOOK_URL}
+      ZOHO_CLIQ_BOT_TOKEN: ${ZOHO_CLIQ_BOT_TOKEN}
+      ZOHO_CLIQ_BOT_NAME: StandupBot
+      
+      # OpenAI Configuration (Set before deploying)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: gpt-4
+      OPENAI_MAX_TOKENS: 500
+      
+      # GitHub Configuration (Optional)
+      GITHUB_API_URL: https://api.github.com
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      
+      # Jira Configuration (Optional)
+      JIRA_API_URL: ${JIRA_API_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      
+      # Standup Configuration
+      STANDUP_REMINDER_ENABLED: true
+      STANDUP_REMINDER_CRON: "0 0 9 * * MON-FRI"
+      
+      # Java Options
+      JAVA_OPTS: -Xmx512m -Xms256m
+    ports:
+      - "8080:8080"
+    networks:
+      - standup-network
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+
+networks:
+  standup-network:
+    driver: bridge

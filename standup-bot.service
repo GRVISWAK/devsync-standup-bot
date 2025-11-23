@@ -1,0 +1,33 @@
+[Unit]
+Description=DevSync Standup Bot Service
+After=syslog.target network.target mysql.service
+
+[Service]
+User=standupbot
+Group=standupbot
+Type=simple
+
+# Application directory
+WorkingDirectory=/opt/standup-bot
+
+# Environment file
+EnvironmentFile=/opt/standup-bot/.env
+
+# Java application
+ExecStart=/usr/bin/java -jar /opt/standup-bot/standup-bot-1.0.0.jar
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=standup-bot
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=1G
+
+[Install]
+WantedBy=multi-user.target
