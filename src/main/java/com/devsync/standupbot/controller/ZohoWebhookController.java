@@ -70,24 +70,23 @@ public class ZohoWebhookController {
             }
             
             // Check if team already exists
-            if (teamRepository.findByName(teamName).isPresent()) {
+            if (teamRepository.findByTeamName(teamName).isPresent()) {
                 response.put("text", "⚠️ Team '" + teamName + "' already exists!");
                 return response;
             }
             
             Team team = new Team();
-            team.setName(teamName);
-            team.setChannelId("zoho-channel-" + teamName);
-            team.setTimezone("UTC");
+            team.setTeamName(teamName);
+            team.setZohoChannelId("zoho-channel-" + teamName);
             
             team = teamRepository.save(team);
             
             response.put("text", "✅ Team created successfully!\n\n" +
                     "📋 **Team Details:**\n" +
-                    "• Name: " + team.getName() + "\n" +
+                    "• Name: " + team.getTeamName() + "\n" +
                     "• ID: " + team.getId() + "\n" +
-                    "• Channel: " + team.getChannelId() + "\n\n" +
-                    "➡️ Next: Register users with 'register username:yourname email:your@email.com'");
+                    "• Channel: " + team.getZohoChannelId() + "\n\n" +
+                    "➡️ Next: Register users with 'register name:yourname email:your@email.com'");
         } catch (Exception e) {
             response.put("text", "❌ Error creating team: " + e.getMessage());
         }
@@ -98,11 +97,11 @@ public class ZohoWebhookController {
         Map<String, Object> response = new HashMap<>();
         try {
             // Simple parsing
-            String username = "testuser";
+            String name = "testuser";
             String email = "test@example.com";
             
-            if (message.contains("username:")) {
-                username = message.split("username:")[1].trim().split("\\s")[0];
+            if (message.contains("name:")) {
+                name = message.split("name:")[1].trim().split("\\s")[0];
             }
             if (message.contains("email:")) {
                 email = message.split("email:")[1].trim().split("\\s")[0];
@@ -115,16 +114,15 @@ public class ZohoWebhookController {
             }
             
             User user = new User();
-            user.setUsername(username);
+            user.setName(name);
             user.setEmail(email);
-            user.setZohoUserId("zoho-" + username);
-            user.setRole(UserRole.DEVELOPER);
+            user.setZohoUserId("zoho-" + name);
             
             user = userRepository.save(user);
             
             response.put("text", "✅ User registered successfully!\n\n" +
                     "👤 **User Details:**\n" +
-                    "• Username: " + user.getUsername() + "\n" +
+                    "• Name: " + user.getName() + "\n" +
                     "• Email: " + user.getEmail() + "\n" +
                     "• ID: " + user.getId() + "\n\n" +
                     "➡️ Ready to submit standups! Type 'standup' to begin.");
@@ -156,7 +154,7 @@ public class ZohoWebhookController {
                 "**Team Management:**\n" +
                 "• `create team name:TeamName` - Create a new team\n\n" +
                 "**User Management:**\n" +
-                "• `register username:john email:john@example.com` - Register user\n\n" +
+                "• `register name:john email:john@example.com` - Register user\n\n" +
                 "**Standup Commands:**\n" +
                 "• `standup` - Start daily standup\n" +
                 "• `status` - View recent standups\n\n" +
@@ -184,7 +182,7 @@ public class ZohoWebhookController {
         response.put("text", "👋 Hello! I'm StandupBot.\n\n" +
                 "🎯 **Quick Start:**\n" +
                 "1. Create team: `create team name:Engineering`\n" +
-                "2. Register: `register username:john email:john@example.com`\n" +
+                "2. Register: `register name:john email:john@example.com`\n" +
                 "3. Submit standup: `standup`\n\n" +
                 "Type 'help' for all commands.");
         return response;
