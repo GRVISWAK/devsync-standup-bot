@@ -23,6 +23,8 @@ public interface StandupRepository extends JpaRepository<Standup, Long> {
     @Query("SELECT s FROM Standup s JOIN FETCH s.user WHERE s.user = :user AND s.standupDate = :standupDate")
     Optional<Standup> findByUserAndStandupDate(@Param("user") User user, @Param("standupDate") LocalDate standupDate);
 
+    boolean existsByUserAndStandupDate(User user, LocalDate standupDate);
+
     List<Standup> findByUserAndStandupDateBetween(User user, LocalDate startDate, LocalDate endDate);
 
     List<Standup> findByStandupDateAndStatus(LocalDate standupDate, Standup.StandupStatus status);

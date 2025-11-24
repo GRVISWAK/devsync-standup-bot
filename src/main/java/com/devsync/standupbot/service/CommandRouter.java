@@ -2,11 +2,17 @@ package com.devsync.standupbot.service;
 
 import com.devsync.standupbot.dto.UserSession;
 import com.devsync.standupbot.dto.ZohoUserContext;
+import com.devsync.standupbot.model.Standup;
 import com.devsync.standupbot.model.Team;
 import com.devsync.standupbot.model.User;
+import com.devsync.standupbot.repository.StandupRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Command router - routes incoming commands to appropriate handlers
@@ -22,6 +28,10 @@ public class CommandRouter {
     private final OrganizationService organizationService;
     private final TeamService teamService;
     private final UserService userService;
+    private final GitHubService githubService;
+    private final JiraService jiraService;
+    private final AIService aiService;
+    private final StandupRepository standupRepository;
     
     /**
      * Route command to appropriate handler
@@ -228,22 +238,312 @@ public class CommandRouter {
     }
     
     /**
-     * Placeholder methods for other flows
+     * Start user addition
      */
     private String startUserAddition(ZohoUserContext context) {
-        return "👤 **Add User** - Coming in next implementation\n\nThis feature will allow you to add team members with their GitHub and Jira credentials.";
+        // Check if user is registered and has team
+        if (!userService.isUserRegistered(context.getZohoUserId())) {
+            return "❌ Please register your organization first with **/register-org**";
+        }
+        
+        User user = userService.getUserByZohoId(context.getZohoUserId()).get();
+        if (user.getTeam() == null) {
+            return "❌ You must be part of a team to add users. Create a team with **/create-team** first.";
+        }
+        
+        // Check permissions
+        if (!permissionService.canAddUserToTeam(context.getZohoUserId(), user.getTeam().getId())) {
+            return "❌ Only team leads and organization admins can add users.";
+        }
+        
+        sessionManager.setState(context.getZohoUserId(), UserSession.SessionState.ADDING_USER);
+        sessionManager.putData(context.getZohoUserId(), "teamId", user.getTeam().getId());
+        
+        return "👤 **Add User to Team**\n\n" +
+               "Please mention the user you want to add.\n\n" +
+               "Example: _@JohnDoe_\n\n" +
+               "(Type **cancel** to abort)";
     }
     
+    /**
+     * Handle user addition flow
+     */
     private String handleUserAdditionFlow(ZohoUserContext context) {
-        return "User addition flow - to be implemented";
+        int step = sessionManager.getStep(context.getZohoUserId());
+        String message = context.getMessage().trim();
+        
+        if (message.equalsIgnoreCase("cancel")) {
+            sessionManager.resetSession(context.getZohoUserId());
+            return "❌ User addition cancelled.";
+        }
+        
+        if (step == 0) {
+            // Step 0: Got mentioned user - extract Zoho ID, name, email
+            // For now, ask for email manually (in real Zoho integration, we'd extract from mention)
+            sessionManager.putData(context.getZohoUserId(), "newUserName", message.replace("@", ""));
+            sessionManager.nextStep(context.getZohoUserId());
+            return "What is " + message + "'s email address?";
+        } else if (step == 1) {
+            // Step 1: Got email, ask for GitHub username
+            sessionManager.putData(context.getZohoUserId(), "newUserEmail", message);
+            sessionManager.nextStep(context.getZohoUserId());
+            return "What is their GitHub username?\n\n(Type **skip** if they don't have one)";
+        } else if (step == 2) {
+            // Step 2: Got GitHub username, ask for GitHub token
+            if (!message.equalsIgnoreCase("skip")) {
+                sessionManager.putData(context.getZohoUserId(), "githubUsername", message);
+                sessionManager.nextStep(context.getZohoUserId());
+                return "What is their GitHub Personal Access Token?\n\n" +
+                       "_This is needed to auto-fetch their commits during standup._\n\n" +
+                       "(Type **skip** to configure later)";
+            } else {
+                // Skip GitHub token - manually advance 2 steps (skip token + jira email questions)
+                sessionManager.getSession(context.getZohoUserId()).setStep(4);
+                return "What is their Jira email?\n\n(Type **skip** if they don't use Jira)";
+            }
+        } else if (step == 3) {
+            // Step 3: Got GitHub token, ask for Jira email
+            if (!message.equalsIgnoreCase("skip")) {
+                sessionManager.putData(context.getZohoUserId(), "githubToken", message);
+            }
+            sessionManager.nextStep(context.getZohoUserId());
+            return "What is their Jira email?\n\n(Type **skip** if they don't use Jira)";
+        } else if (step == 4) {
+            // Step 4: Got Jira email, ask for Jira account ID
+            if (!message.equalsIgnoreCase("skip")) {
+                sessionManager.putData(context.getZohoUserId(), "jiraEmail", message);
+                sessionManager.nextStep(context.getZohoUserId());
+                return "What is their Jira Account ID?\n\n(Type **skip** to configure later)";
+            } else {
+                // No Jira, create user
+                return createUserFromSession(context);
+            }
+        } else if (step == 5) {
+            // Step 5: Got Jira account ID, ask for Jira API token
+            if (!message.equalsIgnoreCase("skip")) {
+                sessionManager.putData(context.getZohoUserId(), "jiraAccountId", message);
+                sessionManager.nextStep(context.getZohoUserId());
+                return "What is their Jira API Token?\n\n(Type **skip** to configure later)";
+            } else {
+                return createUserFromSession(context);
+            }
+        } else if (step == 6) {
+            // Step 6: Got Jira API token, create user
+            if (!message.equalsIgnoreCase("skip")) {
+                sessionManager.putData(context.getZohoUserId(), "jiraApiToken", message);
+            }
+            return createUserFromSession(context);
+        }
+        
+        return "Something went wrong. Please try again with **/add-user**";
     }
     
+    /**
+     * Create user from session data
+     */
+    private String createUserFromSession(ZohoUserContext context) {
+        try {
+            Long teamId = sessionManager.getData(context.getZohoUserId(), "teamId", Long.class);
+            Team team = teamService.getTeamById(teamId).orElseThrow();
+            
+            String newUserName = sessionManager.getData(context.getZohoUserId(), "newUserName", String.class);
+            String newUserEmail = sessionManager.getData(context.getZohoUserId(), "newUserEmail", String.class);
+            
+            // Generate temporary Zoho ID (in real integration, this comes from @mention)
+            String newUserZohoId = "temp_" + System.currentTimeMillis();
+            
+            // Register user
+            User newUser = userService.registerUser(
+                context.getZohoUserId(),
+                team,
+                newUserZohoId,
+                newUserName,
+                newUserEmail
+            );
+            
+            // Update GitHub credentials if provided
+            String githubUsername = sessionManager.getData(context.getZohoUserId(), "githubUsername", String.class);
+            String githubToken = sessionManager.getData(context.getZohoUserId(), "githubToken", String.class);
+            if (githubUsername != null && githubToken != null) {
+                userService.updateGitHubCredentials(newUserZohoId, githubUsername, githubToken);
+            }
+            
+            // Update Jira credentials if provided
+            String jiraAccountId = sessionManager.getData(context.getZohoUserId(), "jiraAccountId", String.class);
+            String jiraEmail = sessionManager.getData(context.getZohoUserId(), "jiraEmail", String.class);
+            String jiraApiToken = sessionManager.getData(context.getZohoUserId(), "jiraApiToken", String.class);
+            if (jiraAccountId != null && jiraEmail != null && jiraApiToken != null) {
+                userService.updateJiraCredentials(newUserZohoId, jiraAccountId, jiraEmail, jiraApiToken);
+            }
+            
+            sessionManager.resetSession(context.getZohoUserId());
+            
+            return "✅ **User Added Successfully!**\n\n" +
+                   "Name: **" + newUserName + "**\n" +
+                   "Email: **" + newUserEmail + "**\n" +
+                   "Team: **" + team.getTeamName() + "**\n" +
+                   "Role: **DEVELOPER**\n" +
+                   (githubUsername != null ? "GitHub: **" + githubUsername + "** ✅\n" : "") +
+                   (jiraEmail != null ? "Jira: **" + jiraEmail + "** ✅\n" : "") +
+                   "\nThey can now submit standups with **standup** command!";
+            
+        } catch (Exception e) {
+            sessionManager.resetSession(context.getZohoUserId());
+            return "❌ Error adding user: " + e.getMessage();
+        }
+    }
+    
+    /**
+     * Start standup
+     */
     private String startStandup(ZohoUserContext context) {
-        return "📝 **Standup** - Coming in next implementation\n\nThis will auto-fetch your GitHub commits and Jira issues for quick standup submission.";
+        // Check if user is registered
+        if (!userService.isUserRegistered(context.getZohoUserId())) {
+            return "❌ Please register your organization first with **/register-org**";
+        }
+        
+        User user = userService.getUserByZohoId(context.getZohoUserId()).get();
+        
+        if (user.getTeam() == null) {
+            return "❌ You must join a team before submitting standups.";
+        }
+        
+        // Check if standup already submitted today
+        LocalDate today = LocalDate.now();
+        if (standupRepository.existsByUserAndStandupDate(user, today)) {
+            return "✅ You've already submitted standup for today!\n\nType **/status** to view your profile.";
+        }
+        
+        // Fetch GitHub commits and Jira issues
+        StringBuilder context_info = new StringBuilder();
+        
+        if (user.getGithubUsername() != null && user.getGithubToken() != null) {
+            try {
+                List<String> commits = githubService.fetchRecentCommits(
+                    user.getGithubUsername(),
+                    user.getGithubToken()
+                );
+                
+                if (!commits.isEmpty()) {
+                    context_info.append("\n**📝 Your GitHub Commits (Last 24h):**\n");
+                    for (String commit : commits) {
+                        context_info.append(commit).append("\n");
+                    }
+                    sessionManager.putData(context.getZohoUserId(), "githubCommits", commits);
+                }
+            } catch (Exception e) {
+                log.error("Error fetching GitHub commits", e);
+            }
+        }
+        
+        if (user.getJiraAccountId() != null && user.getJiraApiToken() != null && user.getTeam() != null) {
+            try {
+                Team team = user.getTeam();
+                if (team.getJiraApiUrl() != null) {
+                    List<String> issues = jiraService.fetchActiveTasks(
+                        user.getJiraAccountId(),
+                        team.getJiraApiUrl(),
+                        user.getJiraEmail(),
+                        user.getJiraApiToken()
+                    );
+                    
+                    if (!issues.isEmpty()) {
+                        context_info.append("\n**🎫 Your Jira Issues (Updated Last 24h):**\n");
+                        for (String issue : issues) {
+                            context_info.append(issue).append("\n");
+                        }
+                        sessionManager.putData(context.getZohoUserId(), "jiraIssues", issues);
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Error fetching Jira issues", e);
+            }
+        }
+        
+        sessionManager.setState(context.getZohoUserId(), UserSession.SessionState.STANDUP_YESTERDAY);
+        
+        return "📝 **Daily Standup**\n" +
+               context_info.toString() +
+               "\n**What did you accomplish yesterday?**\n\n" +
+               "_Describe your work, or type **auto** to use the commits/issues above._";
     }
     
+    /**
+     * Handle standup flow
+     */
     private String handleStandupFlow(ZohoUserContext context) {
-        return "Standup flow - to be implemented";
+        UserSession.SessionState state = sessionManager.getState(context.getZohoUserId());
+        String message = context.getMessage().trim();
+        
+        if (message.equalsIgnoreCase("cancel")) {
+            sessionManager.resetSession(context.getZohoUserId());
+            return "❌ Standup cancelled.";
+        }
+        
+        if (state == UserSession.SessionState.STANDUP_YESTERDAY) {
+            // Got yesterday's work
+            sessionManager.putData(context.getZohoUserId(), "yesterdayWork", message);
+            sessionManager.setState(context.getZohoUserId(), UserSession.SessionState.STANDUP_TODAY);
+            return "**What are you planning to do today?**";
+        } else if (state == UserSession.SessionState.STANDUP_TODAY) {
+            // Got today's plan
+            sessionManager.putData(context.getZohoUserId(), "todayPlan", message);
+            sessionManager.setState(context.getZohoUserId(), UserSession.SessionState.STANDUP_BLOCKERS);
+            return "**Any blockers or challenges?**\n\n(Type **none** if no blockers)";
+        } else if (state == UserSession.SessionState.STANDUP_BLOCKERS) {
+            // Got blockers, create standup
+            return createStandupFromSession(context, message);
+        }
+        
+        return "Something went wrong. Please try again with **standup**";
+    }
+    
+    /**
+     * Create standup from session data
+     */
+    private String createStandupFromSession(ZohoUserContext context, String blockers) {
+        try {
+            User user = userService.getUserByZohoId(context.getZohoUserId()).get();
+            
+            String yesterdayWork = sessionManager.getData(context.getZohoUserId(), "yesterdayWork", String.class);
+            String todayPlan = sessionManager.getData(context.getZohoUserId(), "todayPlan", String.class);
+            
+            // Get GitHub commits and Jira issues from session
+            @SuppressWarnings("unchecked")
+            List<String> githubCommits = (List<String>) sessionManager.getData(context.getZohoUserId(), "githubCommits");
+            @SuppressWarnings("unchecked")
+            List<String> jiraIssues = (List<String>) sessionManager.getData(context.getZohoUserId(), "jiraIssues");
+            
+            if (githubCommits == null) githubCommits = new ArrayList<>();
+            if (jiraIssues == null) jiraIssues = new ArrayList<>();
+            
+            // Generate AI summary with GitHub and Jira context
+            String aiSummary = aiService.generateStandupSummary(yesterdayWork, todayPlan, blockers,
+                githubCommits, jiraIssues, new ArrayList<>());
+            
+            // Create standup
+            Standup standup = Standup.builder()
+                .user(user)
+                .standupDate(LocalDate.now())
+                .yesterdayWork(yesterdayWork)
+                .todayPlan(todayPlan)
+                .blockers(blockers.equalsIgnoreCase("none") ? null : blockers)
+                .status(Standup.StandupStatus.COMPLETED)
+                .aiSummary(aiSummary)
+                .build();
+            
+            standupRepository.save(standup);
+            sessionManager.resetSession(context.getZohoUserId());
+            
+            return "✅ **Standup Submitted!**\n\n" +
+                   "**AI Summary:**\n" + aiSummary + "\n\n" +
+                   "Great work! 🎉";
+            
+        } catch (Exception e) {
+            log.error("Error creating standup", e);
+            sessionManager.resetSession(context.getZohoUserId());
+            return "❌ Error submitting standup: " + e.getMessage();
+        }
     }
     
     private String handleGitHubUpdateFlow(ZohoUserContext context) {
