@@ -61,7 +61,7 @@ public class User {
     private String jiraApiToken; // API Token for fetching Jira issues
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "role")
+    @Column(name = "role", length = 20)
     private UserRole role;
 
     @Column(name = "created_at", nullable = false, updatable = false)
