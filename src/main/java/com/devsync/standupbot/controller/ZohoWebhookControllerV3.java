@@ -45,15 +45,25 @@ public class ZohoWebhookControllerV3 {
         try {
             log.info("Received Zoho webhook payload: {}", payload);
             
-            // Parse JSON payload
-            JsonNode rootNode = objectMapper.readTree(payload);
+            ZohoUserContext context = null;
             
-            // Extract user context
-            ZohoUserContext context = parseUserContext(rootNode);
+            // Try JSON parsing first
+            try {
+                JsonNode rootNode = objectMapper.readTree(payload);
+                context = parseUserContext(rootNode);
+            } catch (Exception e) {
+                log.info("Not JSON payload, trying plain text format");
+            }
+            
+            // Fallback: Parse plain text format (for basic Zoho Cliq bots)
+            if (context == null || context.getZohoUserId() == null) {
+                context = parsePlainTextPayload(payload);
+            }
             
             if (context == null || context.getZohoUserId() == null) {
-                log.error("Failed to parse user context from payload");
-                return buildTextResponse("❌ Error: Could not identify user. Please try again.");
+                log.error("Failed to parse user context from payload: {}", payload);
+                return buildTextResponse("❌ Error: Could not identify user. Please configure bot with user context.\n\n" +
+                    "Expected JSON format:\n```\n{\n  \"user\": {\"id\": \"...\", \"name\": \"...\", \"email\": \"...\"},\n  \"message\": \"...\"\n}\n```");
             }
             
             log.info("Processing command from user: {} ({}), message: {}", 
@@ -106,6 +116,46 @@ public class ZohoWebhookControllerV3 {
                 
         } catch (Exception e) {
             log.error("Error parsing user context", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Parse plain text payload (fallback for basic Zoho Cliq bots)
+     * For testing, accepts format: "user:id:name:email message"
+     */
+    private ZohoUserContext parsePlainTextPayload(String payload) {
+        try {
+            // For basic Zoho bots that just send the message text
+            // Use a default test user if no user info is provided
+            String message = payload.trim();
+            
+            // Check if payload has user info in format: "userid:username:email message"
+            if (message.contains(":") && message.split(":").length >= 3) {
+                String[] parts = message.split("\\s+", 2);
+                String[] userInfo = parts[0].split(":");
+                
+                if (userInfo.length >= 3) {
+                    return ZohoUserContext.builder()
+                        .zohoUserId(userInfo[0])
+                        .name(userInfo[1])
+                        .email(userInfo[2])
+                        .message(parts.length > 1 ? parts[1] : "")
+                        .build();
+                }
+            }
+            
+            // Fallback: use message as-is with placeholder user
+            log.warn("Using placeholder user for plain text message: {}", message);
+            return ZohoUserContext.builder()
+                .zohoUserId("test_user_001")
+                .name("Test User")
+                .email("test@example.com")
+                .message(message)
+                .build();
+                
+        } catch (Exception e) {
+            log.error("Error parsing plain text payload", e);
             return null;
         }
     }
