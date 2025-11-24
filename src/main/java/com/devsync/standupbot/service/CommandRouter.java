@@ -40,6 +40,8 @@ public class CommandRouter {
         String zohoUserId = context.getZohoUserId();
         String message = context.getMessage().trim().toLowerCase();
         
+        log.info("Routing command - User: {}, Message: '{}'", zohoUserId, message);
+        
         // Check if user has active session (multi-step conversation)
         if (sessionManager.hasActiveSession(zohoUserId)) {
             return handleSessionContinuation(context);

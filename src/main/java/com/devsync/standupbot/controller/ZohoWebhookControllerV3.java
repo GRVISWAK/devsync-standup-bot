@@ -51,6 +51,20 @@ public class ZohoWebhookControllerV3 {
             try {
                 JsonNode rootNode = objectMapper.readTree(payload);
                 context = parseUserContext(rootNode);
+                
+                // If we successfully parsed JSON but no user info, extract message from JSON
+                if (context == null || context.getZohoUserId() == null) {
+                    String message = rootNode.path("message").asText("");
+                    if (!message.isEmpty()) {
+                        log.info("Parsed JSON message without user context: {}", message);
+                        context = ZohoUserContext.builder()
+                            .zohoUserId("test_user_001")
+                            .name("Test User")
+                            .email("test@example.com")
+                            .message(message)
+                            .build();
+                    }
+                }
             } catch (Exception e) {
                 log.info("Not JSON payload, trying plain text format");
             }
