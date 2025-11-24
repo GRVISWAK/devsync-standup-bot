@@ -1,10 +1,10 @@
 package com.devsync.standupbot.model;
 
 /**
- * User roles for access control
+ * User roles for access control in organization hierarchy
  */
 public enum UserRole {
-    ADMIN,      // Can configure team settings
-    MANAGER,    // Can view all team standups
-    MEMBER      // Regular team member
+    ORG_ADMIN,      // Organization admin - full control over org, all teams, and users
+    TEAM_LEAD,      // Team leader - can manage their team, add users, view reports
+    DEVELOPER       // Regular developer - can submit standups, view own history
 }

@@ -1,5 +1,6 @@
 package com.devsync.standupbot.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -10,10 +11,12 @@ import java.time.LocalDateTime;
 
 /**
  * Entity for storing team-level configurations
- * Each team can have their own API tokens and settings
+ * Teams belong to an organization and have a team lead
  */
 @Entity
-@Table(name = "teams")
+@Table(name = "teams", uniqueConstraints = {
+    @UniqueConstraint(columnNames = {"organization_id", "team_name"})
+})
 @Data
 @Builder
 @NoArgsConstructor
@@ -24,8 +27,16 @@ public class Team {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "organization_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+    private Organization organization;
+
+    @Column(name = "team_name", nullable = false, length = 100)
     private String teamName;
+
+    @Column(name = "team_lead_zoho_id", nullable = false, length = 100)
+    private String teamLeadZohoId;
 
     @Column(unique = true)
     private String zohoChannelId;
@@ -63,6 +74,9 @@ public class Team {
     @Column(name = "reminder_time")
     private String reminderTime; // e.g., "09:00"
 
+    @Column(name = "timezone")
+    private String timezone;
+
     @Column(nullable = false)
     private Boolean active;
 
@@ -81,6 +95,9 @@ public class Team {
         }
         if (openaiModel == null) {
             openaiModel = "gpt-4";
+        }
+        if (timezone == null) {
+            timezone = "UTC";
         }
     }
 

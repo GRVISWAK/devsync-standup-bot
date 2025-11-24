@@ -13,7 +13,9 @@ import java.time.LocalDateTime;
  * Entity representing a user in the system
  */
 @Entity
-@Table(name = "users")
+@Table(name = "users", indexes = {
+    @Index(name = "idx_zoho_user_id", columnList = "zoho_user_id")
+})
 @Data
 @Builder
 @NoArgsConstructor
@@ -24,13 +26,18 @@ public class User {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "organization_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+    private Organization organization;
+
     @Column(nullable = false, unique = true)
     private String email;
 
     @Column(nullable = false)
     private String name;
 
-    @Column(name = "zoho_user_id", unique = true)
+    @Column(name = "zoho_user_id", unique = true, nullable = false, length = 100)
     private String zohoUserId;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -41,8 +48,17 @@ public class User {
     @Column(name = "github_username")
     private String githubUsername;
 
+    @Column(name = "github_token", length = 500)
+    private String githubToken; // Personal Access Token for fetching commits
+
     @Column(name = "jira_account_id")
     private String jiraAccountId;
+
+    @Column(name = "jira_email")
+    private String jiraEmail;
+
+    @Column(name = "jira_api_token", length = 500)
+    private String jiraApiToken; // API Token for fetching Jira issues
 
     @Enumerated(EnumType.STRING)
     @Column(name = "role")
@@ -58,6 +74,9 @@ public class User {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
+        if (role == null) {
+            role = UserRole.DEVELOPER;
+        }
     }
 
     @PreUpdate

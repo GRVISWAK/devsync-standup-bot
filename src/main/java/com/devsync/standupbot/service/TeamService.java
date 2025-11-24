@@ -1,8 +1,12 @@
 package com.devsync.standupbot.service;
 
 import com.devsync.standupbot.dto.TeamConfigRequest;
+import com.devsync.standupbot.model.Organization;
 import com.devsync.standupbot.model.Team;
+import com.devsync.standupbot.model.User;
+import com.devsync.standupbot.model.UserRole;
 import com.devsync.standupbot.repository.TeamRepository;
+import com.devsync.standupbot.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,8 +24,106 @@ import java.util.Optional;
 public class TeamService {
 
     private final TeamRepository teamRepository;
+    private final UserRepository userRepository;
+    private final PermissionService permissionService;
 
     /**
+     * Create new team (ORG_ADMIN only)
+     * Team creator becomes TEAM_LEAD
+     */
+    @Transactional
+    public Team createTeam(String creatorZohoId, String teamName, String githubOrg, String zohoChannelId) {
+        // Get user and verify permissions
+        User creator = userRepository.findByZohoUserId(creatorZohoId)
+            .orElseThrow(() -> new IllegalArgumentException("User not registered. Please register organization first with /register-org"));
+        
+        Organization organization = creator.getOrganization();
+        
+        // Only ORG_ADMIN can create teams
+        if (!permissionService.canCreateTeam(creatorZohoId, organization.getId())) {
+            throw new IllegalArgumentException("Only organization admins can create teams");
+        }
+        
+        // Check if team already exists in this organization
+        Optional<Team> existingTeam = teamRepository.findByOrganizationAndTeamName(organization, teamName);
+        if (existingTeam.isPresent()) {
+            throw new IllegalArgumentException("Team '" + teamName + "' already exists in your organization");
+        }
+        
+        // Create team
+        Team team = Team.builder()
+            .organization(organization)
+            .teamName(teamName)
+            .teamLeadZohoId(creatorZohoId)
+            .githubOrganization(githubOrg)
+            .zohoChannelId(zohoChannelId)
+            .active(true)
+            .build();
+        
+        team = teamRepository.save(team);
+        log.info("Team created: {} in organization {} by {}", teamName, organization.getName(), creator.getName());
+        
+        // Update creator to TEAM_LEAD and assign to team
+        creator.setRole(UserRole.TEAM_LEAD);
+        creator.setTeam(team);
+        userRepository.save(creator);
+        log.info("User {} promoted to TEAM_LEAD of team {}", creator.getName(), teamName);
+        
+        return team;
+    }
+    
+    /**
+     * Get team by ID
+     */
+    public Optional<Team> getTeamById(Long teamId) {
+        return teamRepository.findById(teamId);
+    }
+    
+    /**
+     * Get all teams in organization
+     */
+    public List<Team> getTeamsByOrganization(Organization organization) {
+        return teamRepository.findByOrganization(organization);
+    }
+    
+    /**
+     * Update team GitHub token
+     */
+    @Transactional
+    public void updateGitHubToken(Long teamId, String zohoUserId, String githubToken) {
+        if (!permissionService.canManageTeam(zohoUserId, teamId)) {
+            throw new IllegalArgumentException("You don't have permission to manage this team");
+        }
+        
+        Team team = teamRepository.findById(teamId)
+            .orElseThrow(() -> new IllegalArgumentException("Team not found"));
+        
+        team.setGithubToken(githubToken);
+        teamRepository.save(team);
+        log.info("GitHub token updated for team {}", team.getTeamName());
+    }
+    
+    /**
+     * Update team Jira credentials
+     */
+    @Transactional
+    public void updateJiraCredentials(Long teamId, String zohoUserId, String jiraApiUrl, String jiraEmail, String jiraApiToken) {
+        if (!permissionService.canManageTeam(zohoUserId, teamId)) {
+            throw new IllegalArgumentException("You don't have permission to manage this team");
+        }
+        
+        Team team = teamRepository.findById(teamId)
+            .orElseThrow(() -> new IllegalArgumentException("Team not found"));
+        
+        team.setJiraApiUrl(jiraApiUrl);
+        team.setJiraEmail(jiraEmail);
+        team.setJiraApiToken(jiraApiToken);
+        teamRepository.save(team);
+        log.info("Jira credentials updated for team {}", team.getTeamName());
+    }
+
+    /**
+     * Legacy method for backward compatibility
      * Create or update team configuration
      */
     @Transactional
@@ -62,13 +164,6 @@ public class TeamService {
      */
     public Optional<Team> getTeamByName(String teamName) {
         return teamRepository.findByTeamName(teamName);
-    }
-
-    /**
-     * Get team by ID
-     */
-    public Optional<Team> getTeamById(Long teamId) {
-        return teamRepository.findById(teamId);
     }
 
     /**
