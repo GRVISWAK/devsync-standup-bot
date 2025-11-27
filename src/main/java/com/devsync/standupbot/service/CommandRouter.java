@@ -9,10 +9,13 @@ import com.devsync.standupbot.repository.StandupRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Command router - routes incoming commands to appropriate handlers
@@ -36,6 +39,7 @@ public class CommandRouter {
     /**
      * Route command to appropriate handler
      */
+    @Transactional
     public String routeCommand(ZohoUserContext context) {
         String zohoUserId = context.getZohoUserId();
         String message = context.getMessage().trim().toLowerCase();
@@ -70,6 +74,14 @@ public class CommandRouter {
         
         if (message.startsWith("/status") || message.equals("status") || message.equals("my status")) {
             return getUserStatus(context);
+        }
+        
+        if (message.startsWith("/team-standups") || message.equals("team standups") || message.equals("team standup")) {
+            return getTeamStandups(context);
+        }
+        
+        if (message.startsWith("/team-commits") || message.equals("team commits")) {
+            return getTeamCommits(context);
         }
         
         // Default response
@@ -583,6 +595,8 @@ public class CommandRouter {
                 help.append("• **/add-user** - Add team member\n");
             }
             help.append("• **standup** - Submit daily standup\n");
+            help.append("• **/team-standups** - View team standups (last 7 days)\n");
+            help.append("• **/team-commits** - View team GitHub activity (last 24h)\n");
             help.append("• **/status** - View your profile\n");
         }
         
@@ -624,4 +638,101 @@ public class CommandRouter {
         
         return status.toString();
     }
+    
+    /**
+     * Get team standups (last 7 days)
+     */
+    private String getTeamStandups(ZohoUserContext context) {
+        if (!userService.isUserRegistered(context.getZohoUserId())) {
+            return "❌ You're not registered. Type **/register-org** to get started.";
+        }
+        
+        User user = userService.getUserByZohoId(context.getZohoUserId()).get();
+        if (user.getTeam() == null) {
+            return "❌ You're not assigned to a team yet.";
+        }
+        
+        Team team = user.getTeam();
+        LocalDate sevenDaysAgo = LocalDate.now().minusDays(7);
+        
+        List<Standup> teamStandups = standupRepository.findByUser_TeamAndStandupDateAfterOrderByStandupDateDesc(
+            team, sevenDaysAgo);
+        
+        if (teamStandups.isEmpty()) {
+            return "📊 **Team Standups (Last 7 Days)**\n\n" +
+                   "No standups submitted yet.\n\n" +
+                   "Type **standup** to submit yours!";
+        }
+        
+        StringBuilder response = new StringBuilder("📊 **Team Standups - " + team.getTeamName() + "** (Last 7 Days)\n\n");
+        
+        // Group by date
+        Map<LocalDate, List<Standup>> byDate = teamStandups.stream()
+            .collect(Collectors.groupingBy(Standup::getStandupDate));
+        
+        byDate.entrySet().stream()
+            .sorted(Map.Entry.<LocalDate, List<Standup>>comparingByKey().reversed())
+            .forEach(entry -> {
+                response.append("**").append(entry.getKey()).append("**\n");
+                entry.getValue().forEach(standup -> {
+                    response.append("• **").append(standup.getUser().getName()).append("**\n");
+                    response.append("  Yesterday: ").append(standup.getYesterdayWork()).append("\n");
+                    response.append("  Today: ").append(standup.getTodayPlan()).append("\n");
+                    if (standup.getBlockers() != null && !standup.getBlockers().isEmpty()) {
+                        response.append("  Blockers: ⚠️ ").append(standup.getBlockers()).append("\n");
+                    }
+                    response.append("\n");
+                });
+            });
+        
+        return response.toString();
+    }
+    
+    /**
+     * Get team GitHub commits (last 24 hours)
+     */
+    private String getTeamCommits(ZohoUserContext context) {
+        if (!userService.isUserRegistered(context.getZohoUserId())) {
+            return "❌ You're not registered. Type **/register-org** to get started.";
+        }
+        
+        User currentUser = userService.getUserByZohoId(context.getZohoUserId()).get();
+        if (currentUser.getTeam() == null) {
+            return "❌ You're not assigned to a team yet.";
+        }
+        
+        Team team = currentUser.getTeam();
+        List<User> teamMembers = userService.getUsersByTeam(team.getId());
+        
+        StringBuilder response = new StringBuilder("💻 **Team GitHub Commits** - " + team.getTeamName() + " (Last 24h)\n\n");
+        
+        boolean hasCommits = false;
+        for (User member : teamMembers) {
+            if (member.getGithubUsername() != null && member.getGithubToken() != null) {
+                try {
+                    List<String> commits = githubService.fetchRecentCommits(
+                        member.getGithubUsername(), 
+                        member.getGithubToken()
+                    );
+                    
+                    if (!commits.isEmpty()) {
+                        hasCommits = true;
+                        response.append("**").append(member.getName()).append("** (@").append(member.getGithubUsername()).append(")\n");
+                        commits.forEach(commit -> response.append("• ").append(commit).append("\n"));
+                        response.append("\n");
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to fetch commits for {}: {}", member.getName(), e.getMessage());
+                }
+            }
+        }
+        
+        if (!hasCommits) {
+            response.append("No commits in the last 24 hours.\n\n");
+            response.append("_Team members need to configure GitHub credentials via /add-user_");
+        }
+        
+        return response.toString();
+    }
 }
+

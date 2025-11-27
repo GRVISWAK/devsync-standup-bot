@@ -28,6 +28,9 @@ public interface StandupRepository extends JpaRepository<Standup, Long> {
     List<Standup> findByUserAndStandupDateBetween(User user, LocalDate startDate, LocalDate endDate);
 
     List<Standup> findByStandupDateAndStatus(LocalDate standupDate, Standup.StandupStatus status);
+    
+    List<Standup> findByUser_TeamAndStandupDateAfterOrderByStandupDateDesc(
+        com.devsync.standupbot.model.Team team, LocalDate standupDate);
 
     @Query("SELECT s FROM Standup s WHERE s.standupDate = :date AND s.status = 'COMPLETED'")
     List<Standup> findCompletedStandupsByDate(@Param("date") LocalDate date);
