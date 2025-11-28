@@ -52,6 +52,7 @@ public class UserSession {
     
     public enum SessionState {
         IDLE,                   // No active conversation
+        REGISTERING_USER,       // User registration flow
         REGISTERING_ORG,        // Organization registration flow
         CREATING_TEAM,          // Team creation flow
         ADDING_USER,            // User registration flow

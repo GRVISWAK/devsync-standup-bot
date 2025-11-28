@@ -249,12 +249,13 @@ public class ZohoWebhookControllerV3 {
             // Fallback: Use consistent test user based on IP or session
             String clientIp = headers.getOrDefault("x-real-ip", headers.getOrDefault("x-forwarded-for", "unknown"));
             String testUserId = generateConsistentTestUserId(clientIp);
-            log.warn("No real user data found, using consistent fallback user: {} (IP: {})", testUserId, clientIp);
+            String testEmail = generateTestEmail(testUserId);
+            log.warn("No real user data found, using consistent fallback user: {} (IP: {}, Email: {})", testUserId, clientIp, testEmail);
             
             return ZohoUserContext.builder()
                 .zohoUserId(testUserId)
                 .name("Test User")
-                .email("test@example.com")
+                .email(testEmail)
                 .message(message)
                 .build();
                 
@@ -279,6 +280,19 @@ public class ZohoWebhookControllerV3 {
         
         // Default fallback for consistent testing
         return "test_user_001";
+    }
+    
+    /**
+     * Generate unique test email based on user ID
+     */
+    private String generateTestEmail(String testUserId) {
+        // Extract the suffix from test_user_XXX
+        if (testUserId.startsWith("test_user_")) {
+            String suffix = testUserId.substring("test_user_".length());
+            return "testuser" + suffix + "@example.com";
+        }
+        
+        return "test@example.com";
     }
     
     /**
