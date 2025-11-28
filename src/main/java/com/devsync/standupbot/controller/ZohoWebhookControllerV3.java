@@ -246,9 +246,10 @@ public class ZohoWebhookControllerV3 {
                     .build();
             }
             
-            // Fallback: Use test user with unique ID based on session/timestamp
-            String testUserId = "test_user_" + System.currentTimeMillis() % 1000;
-            log.warn("No real user data found, using fallback user: {}", testUserId);
+            // Fallback: Use consistent test user based on IP or session
+            String clientIp = headers.getOrDefault("x-real-ip", headers.getOrDefault("x-forwarded-for", "unknown"));
+            String testUserId = generateConsistentTestUserId(clientIp);
+            log.warn("No real user data found, using consistent fallback user: {} (IP: {})", testUserId, clientIp);
             
             return ZohoUserContext.builder()
                 .zohoUserId(testUserId)
@@ -261,6 +262,23 @@ public class ZohoWebhookControllerV3 {
             log.error("Error extracting user from payload and headers", e);
             return null;
         }
+    }
+    
+    /**
+     * Generate consistent test user ID for development/testing
+     */
+    private String generateConsistentTestUserId(String clientIp) {
+        // For development, use a stable user ID based on IP
+        if (clientIp != null && !clientIp.equals("unknown")) {
+            // Use last part of IP to create consistent user ID
+            String[] ipParts = clientIp.split("\\.");
+            if (ipParts.length >= 4) {
+                return "test_user_" + ipParts[3];
+            }
+        }
+        
+        // Default fallback for consistent testing
+        return "test_user_001";
     }
     
     /**
