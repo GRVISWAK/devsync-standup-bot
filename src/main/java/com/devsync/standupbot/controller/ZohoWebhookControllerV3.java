@@ -41,9 +41,12 @@ public class ZohoWebhookControllerV3 {
      * }
      */
     @PostMapping("/v3/webhook")
-    public ResponseEntity<Map<String, Object>> handleWebhook(@RequestBody String payload) {
+    public ResponseEntity<Map<String, Object>> handleWebhook(
+        @RequestBody String payload,
+        @RequestHeader Map<String, String> headers) {
         try {
             log.info("Received Zoho webhook payload: {}", payload);
+            log.info("Received headers: {}", headers);
             
             ZohoUserContext context = null;
             
@@ -52,18 +55,9 @@ public class ZohoWebhookControllerV3 {
                 JsonNode rootNode = objectMapper.readTree(payload);
                 context = parseUserContext(rootNode);
                 
-                // If we successfully parsed JSON but no user info, extract message from JSON
+                // If we successfully parsed JSON but no user info, try to extract from payload/headers
                 if (context == null || context.getZohoUserId() == null) {
-                    String message = rootNode.path("message").asText("");
-                    if (!message.isEmpty()) {
-                        log.info("Parsed JSON message without user context: {}", message);
-                        context = ZohoUserContext.builder()
-                            .zohoUserId("test_user_001")
-                            .name("Test User")
-                            .email("test@example.com")
-                            .message(message)
-                            .build();
-                    }
+                    context = extractUserFromPayloadAndHeaders(rootNode, headers);
                 }
             } catch (Exception e) {
                 log.info("Not JSON payload, trying plain text format");
@@ -159,17 +153,112 @@ public class ZohoWebhookControllerV3 {
                 }
             }
             
-            // Fallback: use message as-is with placeholder user
-            log.warn("Using placeholder user for plain text message: {}", message);
+            // Check for test user simulation command: "user:2 /register-org"
+            if (message.startsWith("user:") && message.contains(" ")) {
+                String[] parts = message.split("\\s+", 2);
+                String userIdPart = parts[0]; // "user:2"
+                String actualMessage = parts[1]; // "/register-org"
+                
+                if (userIdPart.contains(":")) {
+                    String[] userInfo = userIdPart.split(":");
+                    if (userInfo.length == 2 && userInfo[0].equals("user")) {
+                        String userNum = userInfo[1];
+                        log.info("Using test user {} for message: {}", userNum, actualMessage);
+                        return ZohoUserContext.builder()
+                            .zohoUserId("test_user_" + userNum)
+                            .name("Test User " + userNum)
+                            .email("testuser" + userNum + "@example.com")
+                            .message(actualMessage)
+                            .build();
+                    }
+                }
+            }
+            
+            // Fallback: use default test user
+            log.warn("Using default test user for message: {}", message);
             return ZohoUserContext.builder()
                 .zohoUserId("test_user_001")
+                .name("Test User 1")
+                .email("testuser1@example.com")
+                .message(message)
+                .build();
+                
+        } catch (Exception e) {
+            log.error("Error parsing plain text payload", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Extract user information from Zoho payload and headers
+     */
+    private ZohoUserContext extractUserFromPayloadAndHeaders(JsonNode rootNode, Map<String, String> headers) {
+        try {
+            String message = rootNode.path("message").asText("");
+            
+            // Check for user info in various Zoho webhook formats
+            String zohoUserId = null;
+            String userName = null;
+            String userEmail = null;
+            
+            // Method 1: Check headers for user information
+            zohoUserId = headers.get("x-zoho-user-id");
+            if (zohoUserId == null) zohoUserId = headers.get("zoho-user-id");
+            
+            userName = headers.get("x-zoho-user-name");
+            if (userName == null) userName = headers.get("zoho-user-name");
+            
+            userEmail = headers.get("x-zoho-user-email");
+            if (userEmail == null) userEmail = headers.get("zoho-user-email");
+            
+            // Method 2: Check payload for additional user fields
+            if (zohoUserId == null && rootNode.has("actor")) {
+                JsonNode actor = rootNode.path("actor");
+                zohoUserId = actor.path("id").asText(null);
+                userName = actor.path("name").asText(null);
+                userEmail = actor.path("email").asText(null);
+            }
+            
+            // Method 3: Check for sender info
+            if (zohoUserId == null && rootNode.has("sender")) {
+                JsonNode sender = rootNode.path("sender");
+                zohoUserId = sender.path("id").asText(null);
+                userName = sender.path("name").asText(null);
+                userEmail = sender.path("email").asText(null);
+            }
+            
+            // Method 4: Check for from field
+            if (zohoUserId == null && rootNode.has("from")) {
+                JsonNode from = rootNode.path("from");
+                zohoUserId = from.path("id").asText(null);
+                userName = from.path("name").asText(null);
+                userEmail = from.path("email").asText(null);
+            }
+            
+            // If we found real user data, use it
+            if (zohoUserId != null && !zohoUserId.isEmpty()) {
+                log.info("Found real user data - ID: {}, Name: {}, Email: {}", zohoUserId, userName, userEmail);
+                return ZohoUserContext.builder()
+                    .zohoUserId(zohoUserId)
+                    .name(userName != null ? userName : "Unknown User")
+                    .email(userEmail != null ? userEmail : "unknown@example.com")
+                    .message(message)
+                    .build();
+            }
+            
+            // Fallback: Use test user with unique ID based on session/timestamp
+            String testUserId = "test_user_" + System.currentTimeMillis() % 1000;
+            log.warn("No real user data found, using fallback user: {}", testUserId);
+            
+            return ZohoUserContext.builder()
+                .zohoUserId(testUserId)
                 .name("Test User")
                 .email("test@example.com")
                 .message(message)
                 .build();
                 
         } catch (Exception e) {
-            log.error("Error parsing plain text payload", e);
+            log.error("Error extracting user from payload and headers", e);
             return null;
         }
     }

@@ -84,6 +84,10 @@ public class CommandRouter {
             return getTeamCommits(context);
         }
         
+        if (message.startsWith("/switch-user ")) {
+            return handleUserSwitch(context);
+        }
+        
         // Default response
         return "I didn't understand that command. Type **/help** to see available commands.";
     }
@@ -733,6 +737,37 @@ public class CommandRouter {
         }
         
         return response.toString();
+    }
+    
+    /**
+     * Handle user switch for testing multiple users
+     */
+    private String handleUserSwitch(ZohoUserContext context) {
+        String message = context.getMessage();
+        String[] parts = message.split("\\s+");
+        
+        if (parts.length < 2) {
+            return "**User Switch (Testing)**\n\n" +
+                   "Usage: `/switch-user john.doe`\n\n" +
+                   "This allows testing multiple users in the same chat.\n" +
+                   "Examples:\n" +
+                   "• `/switch-user alice` - Switch to user alice\n" +
+                   "• `/switch-user bob.smith` - Switch to user bob.smith\n\n" +
+                   "_Note: This is for testing only. Real Zoho users are auto-detected._";
+        }
+        
+        String username = parts[1];
+        
+        // Modify the context to simulate a different user
+        context.setZohoUserId("sim_user_" + username);
+        context.setName(username.replace(".", " ").replace("_", " "));
+        context.setEmail(username + "@example.com");
+        
+        return "✅ **Switched to user:** " + username + "\n\n" +
+               "You can now test commands as this user:\n" +
+               "• Use `/register-org` to create a new organization\n" +
+               "• Use existing commands as this different user\n\n" +
+               "_Use `/switch-user <other-name>` to change again_";
     }
 }
 
